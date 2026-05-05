@@ -1,3 +1,3 @@
 module example.com/go-backend
 
-go 1.18
+go 1.26.2
