@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
@@ -23,7 +24,7 @@ type User struct {
 }
 
 type App struct {
-	DB *sql.DB
+	UserService *UserService
 }
 
 func main() {
@@ -39,8 +40,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	app := &App{
+	if err := migrate(db); err != nil {
+		log.Fatal(err)
+	}
+
+	userRepo := &UserRepository{
 		DB: db,
+	}
+
+	userService := &UserService{
+		Repo: userRepo,
+	}
+
+	app := &App{
+		UserService: userService,
 	}
 
 	http.HandleFunc("/health", app.healthHandler)
@@ -50,27 +63,65 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+func migrate(db *sql.DB) error {
+	query := `
+	CREATE TABLE IF NOT EXISTS users (
+		id SERIAL PRIMARY KEY,
+		name TEXT NOT NULL
+	);
+	
+	INSERT INTO users (name)
+	SELECT 'Alice'
+	WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = 'Alice');
+	
+	INSERT INTO users (name)
+	SELECT 'Bob'
+	WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = 'Bob');
+	`
+
+	_, err := db.Exec(query)
+	return err
+}
+
 func (app *App) healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (app *App) usersHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	users, err := app.findUsers()
+	users, err := app.UserService.ListUsers()
 	if err != nil {
 		log.Println("failed to find users:", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+
 	writeJSON(w, http.StatusOK, users)
 }
 
-func (app *App) findUsers() ([]User, error) {
-	rows, err := app.DB.Query(`
+type UserService struct {
+	Repo *UserRepository
+}
+
+func (s *UserService) ListUsers() ([]User, error) {
+	users, err := s.Repo.FindAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+type UserRepository struct {
+	DB *sql.DB
+}
+
+func (r *UserRepository) FindAll() ([]User, error) {
+	rows, err := r.DB.Query(`
     SELECT id, name
     FROM users
     ORDER BY id
@@ -84,8 +135,7 @@ func (app *App) findUsers() ([]User, error) {
 
 	for rows.Next() {
 		var user User
-		err := rows.Scan(&user.ID, &user.Name)
-		if err != nil {
+		if err := rows.Scan(&user.ID, &user.Name); err != nil {
 			return nil, err
 		}
 		users = append(users, user)
@@ -107,3 +157,11 @@ func writeJSON(w http.ResponseWriter, statusCode int, data any) {
 		log.Println("failed to encode json:", err)
 	}
 }
+
+func writeError(w http.ResponseWriter, statusCode int, message string) {
+	writeJSON(w, statusCode, map[string]string{
+		"error": message,
+	})
+}
+
+var ErrUserNotFound = errors.New("user not found")
