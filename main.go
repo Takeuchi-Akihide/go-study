@@ -6,10 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+type Config struct {
+	Port string
+	DSN  string
+}
 
 type HealthResponse struct {
 	Status string `json:"status"`
@@ -26,6 +33,7 @@ type User struct {
 
 type App struct {
 	UserService *UserService
+	Logger      *slog.Logger
 }
 
 type UserStore interface {
@@ -33,16 +41,25 @@ type UserStore interface {
 }
 
 func main() {
-	dsn := "postgres://dev:password@localhost:5436/app_db?sslmode=disable"
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	db, err := sql.Open("pgx", dsn)
+	cfg := loadConfig()
+
+	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
-		log.Fatal(err)
+		logger.Error("failed to open db", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
+	if err := db.Ping(); err != nil {
+		logger.Error("failed to ping db", "error", err)
+		os.Exit(1)
+	}
+
 	if err := migrate(db); err != nil {
-		log.Fatal(err)
+		logger.Error("failed to migrate db", "error", err)
+		os.Exit(1)
 	}
 
 	userRepo := &UserRepository{
@@ -55,13 +72,37 @@ func main() {
 
 	app := &App{
 		UserService: userService,
+		Logger:      logger,
 	}
 
-	http.HandleFunc("/health", app.healthHandler)
-	http.HandleFunc("/users", app.usersHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", app.healthHandler)
+	mux.HandleFunc("/users", app.usersHandler)
 
-	log.Println("server started at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	addr := ":" + cfg.Port
+
+	logger.Info("server started", "addr", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		logger.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func loadConfig() Config {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://dev:password@localhost:5436/app_db?sslmode=disable"
+	}
+
+	return Config{
+		Port: port,
+		DSN:  dsn,
+	}
 }
 
 func migrate(db *sql.DB) error {
