@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,10 @@ type App struct {
 	UserService *UserService
 }
 
+type UserStore interface {
+	FindAll(ctx context.Context) ([]User, error)
+}
+
 func main() {
 	dsn := "postgres://dev:password@localhost:5436/app_db?sslmode=disable"
 
@@ -35,10 +40,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-
-	if err := db.Ping(); err != nil {
-		log.Fatal(err)
-	}
 
 	if err := migrate(db); err != nil {
 		log.Fatal(err)
@@ -49,7 +50,7 @@ func main() {
 	}
 
 	userService := &UserService{
-		Repo: userRepo,
+		Store: userRepo,
 	}
 
 	app := &App{
@@ -93,7 +94,7 @@ func (app *App) usersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users, err := app.UserService.ListUsers()
+	users, err := app.UserService.ListUsers(r.Context())
 	if err != nil {
 		log.Println("failed to find users:", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -104,11 +105,11 @@ func (app *App) usersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type UserService struct {
-	Repo *UserRepository
+	Store UserStore
 }
 
-func (s *UserService) ListUsers() ([]User, error) {
-	users, err := s.Repo.FindAll()
+func (s *UserService) ListUsers(ctx context.Context) ([]User, error) {
+	users, err := s.Store.FindAll(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -120,12 +121,8 @@ type UserRepository struct {
 	DB *sql.DB
 }
 
-func (r *UserRepository) FindAll() ([]User, error) {
-	rows, err := r.DB.Query(`
-    SELECT id, name
-    FROM users
-    ORDER BY id
-  `)
+func (r *UserRepository) FindAll(ctx context.Context) ([]User, error) {
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, name FROM users ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
