@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
+	"sync"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -29,6 +32,13 @@ type HelloResponse struct {
 type User struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+}
+
+type UserSummary struct {
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	PostCount         int    `json:"post_count"`
+	NotificationCount int    `json:"notification_count"`
 }
 
 type App struct {
@@ -78,6 +88,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", app.healthHandler)
 	mux.HandleFunc("/users", app.usersHandler)
+	mux.HandleFunc("/user-summary", app.userSummaryHandler)
 
 	addr := ":" + cfg.Port
 
@@ -143,6 +154,77 @@ func (app *App) usersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, users)
+}
+
+func (app *App) userSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	idText := r.URL.Query().Get("id")
+	id, err := strconv.Atoi(idText)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	summary, err := buildUserSummary(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func buildUserSummary(id int) (UserSummary, error) {
+	var wg sync.WaitGroup
+
+	var name string
+	var postCount int
+	var notificationCount int
+
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		name = fetchUserName(id)
+	}()
+
+	go func() {
+		defer wg.Done()
+		postCount = fetchPostCount(id)
+	}()
+
+	go func() {
+		defer wg.Done()
+		notificationCount = fetchNotificationCount(id)
+	}()
+
+	wg.Wait()
+
+	return UserSummary{
+		ID:                id,
+		Name:              name,
+		PostCount:         postCount,
+		NotificationCount: notificationCount,
+	}, nil
+}
+
+func fetchUserName(id int) string {
+	time.Sleep(500 * time.Millisecond)
+	return "Alice"
+}
+
+func fetchPostCount(id int) int {
+	time.Sleep(500 * time.Millisecond)
+	return 12
+}
+
+func fetchNotificationCount(id int) int {
+	time.Sleep(500 * time.Millisecond)
+	return 3
 }
 
 type UserService struct {
