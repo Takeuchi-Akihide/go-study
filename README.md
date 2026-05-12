@@ -10,7 +10,13 @@ JSON 出力の実装を通じて、バックエンド実装の流れを学びま
 
 ## 現在の構成
 
-- `main.go` : HTTP サーバー、PostgreSQL 接続、マイグレーション、ハンドラー実装
+- `main.go` : HTTP サーバーの起動処理
+- `app.go` : ルーティングとアプリケーション構造体
+- `config.go` : 環境変数からの設定読み込み
+- `database.go` : PostgreSQL の初期化処理
+- `user.go` : ユーザー関連のハンドラー、サービス、リポジトリ
+- `job.go` : ジョブ関連のハンドラー、キュー、ワーカー
+- `response.go` : JSON レスポンス用の共通処理
 - `main_test.go` : サービスとハンドラーの単体テスト
 - `Dockerfile` : Go バイナリをビルドしてコンテナ化する設定
 - `docker-compose.yml` : アプリと PostgreSQL の開発用構成
@@ -29,7 +35,7 @@ JSON 出力の実装を通じて、バックエンド実装の流れを学びま
 
 ```bash
 cd go-study
-go run main.go
+go run .
 ```
 
 環境変数が指定されていない場合、デフォルトでは以下の接続先が使われます。
