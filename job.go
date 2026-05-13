@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -15,6 +16,11 @@ const (
 	JobRunning JobStatus = "running"
 	JobDone    JobStatus = "done"
 	JobFailed  JobStatus = "failed"
+)
+
+const (
+	jobEnqueueTimeout = 500 * time.Millisecond
+	jobProcessTimeout = 3 * time.Second
 )
 
 type Job struct {
@@ -55,20 +61,25 @@ func createJobHandler(w http.ResponseWriter, r *http.Request) {
 	id := nextJobID
 	nextJobID++
 
-	jobs[id] = &Job{
+	job := &Job{
 		ID:        id,
 		Status:    JobQueued,
 		Input:     req.Input,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	jobs[id] = job
 	jobsMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(r.Context(), jobEnqueueTimeout)
+	defer cancel()
 
 	select {
 	case jobQueue <- id:
-		writeJSON(w, http.StatusAccepted, jobs[id])
-	default:
-		writeError(w, http.StatusServiceUnavailable, "job queue is full")
+		writeJSON(w, http.StatusAccepted, job)
+	case <-ctx.Done():
+		updateJobStatus(id, JobFailed, "job queue is busy")
+		writeError(w, http.StatusServiceUnavailable, "job queue is busy")
 	}
 }
 
@@ -101,14 +112,28 @@ func startWorkers(n int) {
 
 func worker(workerID int) {
 	for jobID := range jobQueue {
-		updateJobStatus(jobID, JobRunning, "")
+		ctx, cancel := context.WithTimeout(context.Background(), jobProcessTimeout)
 
-		time.Sleep(20 * time.Second)
+		if err := processJob(ctx, workerID, jobID); err != nil {
+			updateJobStatus(jobID, JobFailed, err.Error())
+		}
 
-		result := "processed by worker" + strconv.Itoa(workerID)
-
-		updateJobStatus(jobID, JobDone, result)
+		cancel()
 	}
+}
+
+func processJob(ctx context.Context, workerID int, jobID int) error {
+	updateJobStatus(jobID, JobRunning, "")
+
+	select {
+	case <-time.After(2 * time.Second):
+		result := "processed by worker " + strconv.Itoa(workerID)
+		updateJobStatus(jobID, JobDone, result)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 }
 
 func updateJobStatus(id int, status JobStatus, result string) {
